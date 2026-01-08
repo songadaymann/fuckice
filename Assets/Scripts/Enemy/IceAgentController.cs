@@ -141,9 +141,61 @@ public class IceAgentController : MonoBehaviour
         // Log setup info
         Debug.Log($"{name} started: groundCheck={groundCheck != null}, wallCheck={wallCheck != null}, groundLayer={groundLayer.value}, player={player != null}");
         
+        // Create a trigger collider for player detection (so player can pass through but we still detect stomp/damage)
+        CreatePlayerDetectionTrigger();
+        
         // Set initial animation
         SetAnimation(runSprites);
         UpdateSpriteDirection();
+    }
+    
+    /// <summary>
+    /// Creates a child object with a trigger collider for detecting player contact
+    /// This allows the player to pass through enemies while still getting stomped/damaged
+    /// </summary>
+    private void CreatePlayerDetectionTrigger()
+    {
+        // Create child object for trigger
+        GameObject triggerObj = new GameObject("PlayerDetector");
+        triggerObj.transform.parent = transform;
+        triggerObj.transform.localPosition = Vector3.zero;
+        triggerObj.transform.localRotation = Quaternion.identity;
+        triggerObj.transform.localScale = Vector3.one;
+        
+        // Copy the main collider's shape
+        if (col is BoxCollider2D boxCol)
+        {
+            BoxCollider2D triggerBox = triggerObj.AddComponent<BoxCollider2D>();
+            triggerBox.size = boxCol.size;
+            triggerBox.offset = boxCol.offset;
+            triggerBox.isTrigger = true;
+        }
+        else if (col is CapsuleCollider2D capsuleCol)
+        {
+            CapsuleCollider2D triggerCapsule = triggerObj.AddComponent<CapsuleCollider2D>();
+            triggerCapsule.size = capsuleCol.size;
+            triggerCapsule.offset = capsuleCol.offset;
+            triggerCapsule.direction = capsuleCol.direction;
+            triggerCapsule.isTrigger = true;
+        }
+        else if (col is CircleCollider2D circleCol)
+        {
+            CircleCollider2D triggerCircle = triggerObj.AddComponent<CircleCollider2D>();
+            triggerCircle.radius = circleCol.radius;
+            triggerCircle.offset = circleCol.offset;
+            triggerCircle.isTrigger = true;
+        }
+        else
+        {
+            // Fallback: add a box collider
+            BoxCollider2D triggerBox = triggerObj.AddComponent<BoxCollider2D>();
+            triggerBox.size = new Vector2(1f, 1f);
+            triggerBox.isTrigger = true;
+        }
+        
+        // Add the detection script
+        PlayerDetector detector = triggerObj.AddComponent<PlayerDetector>();
+        detector.Initialize(this);
     }
     
     private void Update()
@@ -569,35 +621,51 @@ public class IceAgentController : MonoBehaviour
     }
     
     /// <summary>
-    /// Check if stomp came from above
+    /// Handle player contact (called by PlayerDetector trigger)
     /// </summary>
-    private void OnCollisionEnter2D(Collision2D collision)
+    public void HandlePlayerContact(Collider2D playerCollider)
     {
         if (isDead) return;
         
-        if (collision.gameObject.CompareTag("Player"))
+        // Check if player is above us (stomp)
+        float playerY = playerCollider.transform.position.y;
+        float enemyTopY = transform.position.y + (col.bounds.size.y * 0.3f);
+        
+        Rigidbody2D playerRb = playerCollider.GetComponent<Rigidbody2D>();
+        
+        if (playerY > enemyTopY && playerRb != null && playerRb.velocity.y < 0)
         {
-            // Check if player is above us (stomp)
-            float playerY = collision.transform.position.y;
-            float enemyTopY = transform.position.y + (col.bounds.size.y * 0.3f);
-            
-            Rigidbody2D playerRb = collision.gameObject.GetComponent<Rigidbody2D>();
-            
-            if (playerY > enemyTopY && playerRb != null && playerRb.velocity.y < 0)
+            // Stomped!
+            GetStomped(playerRb);
+        }
+        else
+        {
+            // Player hit from side - hurt player
+            PlayerHealth health = playerCollider.GetComponent<PlayerHealth>();
+            if (health != null)
             {
-                // Stomped!
-                GetStomped(playerRb);
-            }
-            else
-            {
-                // Player hit from side - hurt player
-                PlayerHealth health = collision.gameObject.GetComponent<PlayerHealth>();
-                if (health != null)
-                {
-                    health.TakeDamage(1);
-                }
+                health.TakeDamage(1);
             }
         }
+    }
+    
+    /// <summary>
+    /// Handle continuous player contact (for ongoing damage, etc.)
+    /// </summary>
+    public void HandlePlayerContactContinuous(Collider2D playerCollider)
+    {
+        // Currently we only damage on initial contact, but this could be used
+        // for continuous damage if needed in the future
+    }
+    
+    /// <summary>
+    /// Legacy collision handler - no longer handles player contact (now uses trigger)
+    /// Kept for obstacle/ground collision detection
+    /// </summary>
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        // Player contact is now handled by PlayerDetector trigger
+        // This only handles non-player collisions
     }
     
     /// <summary>
