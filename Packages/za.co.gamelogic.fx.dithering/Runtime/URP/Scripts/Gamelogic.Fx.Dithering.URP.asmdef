@@ -1,0 +1,28 @@
+{
+	"name": "Gamelogic.Fx.Dithering.URP",
+	"rootNamespace": "Gamelogic.Fx.Dithering.URP",
+	"references": [
+		"Gamelogic.Extensions",
+		"Gamelogic.Fx",
+		"Gamelogic.Fx.Dithering",
+		"Gamelogic.Fx.URP",
+		"Unity.RenderPipelines.Universal.Runtime",
+		"UnityEditor.UI",
+		"UnityEngine.UI"
+	],
+	"includePlatforms": [],
+	"excludePlatforms": [],
+	"allowUnsafeCode": false,
+	"overrideReferences": false,
+	"precompiledReferences": [],
+	"autoReferenced": true,
+	"defineConstraints": [],
+	"versionDefines": [
+		{
+			"name": "com.unity.render-pipelines.universal",
+			"expression": "",
+			"define": "GAMELOGIC_HAS_URP"
+		}
+	],
+	"noEngineReferences": false
+}

@@ -1,0 +1,13 @@
+﻿using UnityEngine;
+using Gamelogic.Extensions;
+
+namespace Gamelogic.Fx.Dithering.Editor
+{
+
+	internal sealed class WrappedFloatMatrix : ScriptableObject
+	{
+		public const string MatrixFieldName = nameof(matrix);
+
+		[Presets(nameof(DitherMatrixPresets), nameof(DitherMatrixPresets))] public FloatMatrix matrix = DitherMatrixPresets.Checker.Clone();
+	}
+}

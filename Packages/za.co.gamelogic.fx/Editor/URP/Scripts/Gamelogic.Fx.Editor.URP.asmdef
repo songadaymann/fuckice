@@ -1,0 +1,19 @@
+{
+    "name": "Gamelogic.Fx.Editor.URP",
+    "rootNamespace": "Gamelogic.Fx.Editor.URP",
+    "references": [
+        "Unity.RenderPipelines.Universal.Runtime",
+        "Gamelogic.Fx.URP"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
