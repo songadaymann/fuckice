@@ -9,15 +9,15 @@ public class LayerSetup : MonoBehaviour
     [MenuItem("Tools/Setup Enemy Layer Physics")]
     public static void SetupEnemyLayerPhysics()
     {
-        // Check if Enemy layer exists
-        int enemyLayer = LayerMask.NameToLayer("Enemy");
+        // Check if Enemies layer exists
+        int enemyLayer = LayerMask.NameToLayer("Enemies");
         int playerLayer = LayerMask.NameToLayer("Player");
         
         if (enemyLayer < 0)
         {
-            Debug.LogError("Enemy layer not found! Please create a layer called 'Enemy' in Edit > Project Settings > Tags and Layers");
+            Debug.LogError("Enemies layer not found! Please create a layer called 'Enemies' in Edit > Project Settings > Tags and Layers");
             EditorUtility.DisplayDialog("Layer Missing", 
-                "Please create a layer called 'Enemy' in:\nEdit > Project Settings > Tags and Layers\n\nThen run this tool again.", 
+                "Please create a layer called 'Enemies' in:\nEdit > Project Settings > Tags and Layers\n\nThen run this tool again.", 
                 "OK");
             return;
         }
@@ -34,26 +34,22 @@ public class LayerSetup : MonoBehaviour
         Debug.Log($"SUCCESS: Player (layer {playerLayer}) and Enemy (layer {enemyLayer}) will now pass through each other!");
         Debug.Log("Players can still stomp enemies thanks to the trigger collider detection.");
         
-        // Save the physics settings
-        EditorUtility.SetDirty(Physics2D.defaultPhysicsMaterial);
-        AssetDatabase.SaveAssets();
-        
         EditorUtility.DisplayDialog("Layer Physics Setup Complete", 
-            "Player and Enemy layers are now configured to pass through each other.\n\n" +
-            "Make sure your IceAgent prefabs are on the 'Enemy' layer!", 
+            "Player and Enemies layers are now configured to pass through each other.\n\n" +
+            "Make sure your IceAgent prefabs are on the 'Enemies' layer!", 
             "OK");
     }
     
-    [MenuItem("Tools/Assign Enemy Layer to All ICE Agents")]
+    [MenuItem("Tools/Assign Enemies Layer to All ICE Agents")]
     public static void AssignEnemyLayerToAgents()
     {
-        int enemyLayer = LayerMask.NameToLayer("Enemy");
+        int enemyLayer = LayerMask.NameToLayer("Enemies");
         
         if (enemyLayer < 0)
         {
-            Debug.LogError("Enemy layer not found! Please create it first.");
+            Debug.LogError("Enemies layer not found! Please create it first.");
             EditorUtility.DisplayDialog("Layer Missing", 
-                "Please create a layer called 'Enemy' first.", 
+                "Please create a layer called 'Enemies' first.", 
                 "OK");
             return;
         }
@@ -67,7 +63,7 @@ public class LayerSetup : MonoBehaviour
             EditorUtility.SetDirty(agent.gameObject);
         }
         
-        Debug.Log($"Assigned Enemy layer to {agents.Length} ICE agents in the scene.");
+        Debug.Log($"Assigned Enemies layer to {agents.Length} ICE agents in the scene.");
         
         // Also try to update the prefab if there is one
         string[] prefabGuids = AssetDatabase.FindAssets("t:Prefab IceAgent");
@@ -85,8 +81,8 @@ public class LayerSetup : MonoBehaviour
         
         AssetDatabase.SaveAssets();
         
-        EditorUtility.DisplayDialog("Enemy Layer Assigned", 
-            $"Assigned Enemy layer to {agents.Length} ICE agents in the scene.", 
+        EditorUtility.DisplayDialog("Enemies Layer Assigned", 
+            $"Assigned Enemies layer to {agents.Length} ICE agents in the scene.", 
             "OK");
     }
 }

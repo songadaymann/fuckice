@@ -11,7 +11,7 @@ public class PlayerEnemyPhysics : MonoBehaviour
     {
         // Get layer indices
         int playerLayer = LayerMask.NameToLayer("Player");
-        int enemyLayer = LayerMask.NameToLayer("Enemy");
+        int enemyLayer = LayerMask.NameToLayer("Enemies");
         
         // If layers don't exist, they'll return -1
         if (playerLayer >= 0 && enemyLayer >= 0)

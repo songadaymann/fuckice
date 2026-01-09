@@ -52,15 +52,7 @@ public class IceAgentSetup : EditorWindow
         col.offset = new Vector2(0f, 0f);
         col.direction = CapsuleDirection2D.Vertical;
         
-        // Create child objects for checks
-        GameObject groundCheck = new GameObject("GroundCheck");
-        groundCheck.transform.parent = iceAgent.transform;
-        groundCheck.transform.localPosition = new Vector3(0.3f, -0.95f, 0f);
-        
-        GameObject wallCheck = new GameObject("WallCheck");
-        wallCheck.transform.parent = iceAgent.transform;
-        wallCheck.transform.localPosition = new Vector3(0.5f, 0f, 0f);
-        
+        // Create firePoint child object
         GameObject firePoint = new GameObject("FirePoint");
         firePoint.transform.parent = iceAgent.transform;
         firePoint.transform.localPosition = new Vector3(0.6f, 0.3f, 0f);
@@ -72,15 +64,8 @@ public class IceAgentSetup : EditorWindow
         SerializedObject so = new SerializedObject(controller);
         
         // Ground detection - include both Ground and Default layers
-        so.FindProperty("groundCheck").objectReferenceValue = groundCheck.transform;
-        so.FindProperty("wallCheck").objectReferenceValue = wallCheck.transform;
-        so.FindProperty("firePoint").objectReferenceValue = firePoint.transform;
         so.FindProperty("groundLayer").intValue = LayerMask.GetMask("Ground", "Default");
-        so.FindProperty("playerLayer").intValue = LayerMask.GetMask("Player");
-        
-        // Movement behavior - like goombas, can fall off edges!
-        so.FindProperty("canFallOffEdges").boolValue = true;
-        so.FindProperty("startMovingRight").boolValue = false; // Run LEFT toward player!
+        so.FindProperty("firePoint").objectReferenceValue = firePoint.transform;
         
         // Animation sprites
         SetSpriteArray(so, "runSprites", runSprites);
@@ -130,9 +115,8 @@ public class IceAgentSetup : EditorWindow
             "✓ Prefab saved to Assets/Prefabs/IceAgent.prefab\n" +
             "✓ Projectile prefab created\n" +
             "✓ PlayerHealth added to player\n\n" +
-            "The agent will patrol, shoot at the player,\n" +
-            "and can be stomped like a Goomba!\n\n" +
-            "You can duplicate the prefab to add more enemies.",
+            "The agent will chase the player, shoot,\n" +
+            "jump over obstacles, and can be stomped!",
             "Nice!");
     }
     
@@ -252,4 +236,3 @@ public class IceAgentSetup : EditorWindow
         }
     }
 }
-

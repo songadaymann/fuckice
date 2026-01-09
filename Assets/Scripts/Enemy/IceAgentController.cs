@@ -2,17 +2,15 @@ using UnityEngine;
 using System.Collections;
 
 /// <summary>
-/// ICE Agent enemy controller - patrols, shoots, and can be stomped.
+/// ICE Agent enemy controller - chases player, shoots, jumps obstacles, can be stomped.
+/// SIMPLIFIED VERSION - clear state machine with predictable behavior.
 /// </summary>
 public class IceAgentController : MonoBehaviour
 {
     public enum State { Run, Shoot, Jump, Smooshed }
     
     [Header("Movement")]
-    [SerializeField] private float moveSpeed = 2f;
-    [SerializeField] private float chaseSpeed = 3f; // Faster when chasing player
-    [SerializeField] private bool alwaysChasePlayer = true; // Always try to reach the player
-    [SerializeField] private bool canFallOffEdges = true; // Like goombas!
+    [SerializeField] private float chaseSpeed = 3f;
     
     [Header("Shooting")]
     [SerializeField] private GameObject projectilePrefab;
@@ -20,23 +18,16 @@ public class IceAgentController : MonoBehaviour
     [SerializeField] private float shootInterval = 2f;
     [SerializeField] private float projectileSpeed = 5f;
     [SerializeField] private float shootPauseDuration = 0.5f;
-    
-    [Header("Detection")]
-    [SerializeField] private float detectionRange = 8f;
     [SerializeField] private float shootingRange = 6f;
-    [SerializeField] private LayerMask playerLayer;
-    
-    [Header("Ground Detection")]
-    [SerializeField] private Transform groundCheck;
-    [SerializeField] private Transform wallCheck;
-    [SerializeField] private float checkDistance = 0.5f;
-    [SerializeField] private LayerMask groundLayer;
     
     [Header("Jumping")]
-    [SerializeField] private bool canJumpObstacles = true;
-    [SerializeField] private float jumpForce = 12f; // Base jump force
-    [SerializeField] private float maxJumpableHeight = 2f; // Won't try to jump walls taller than this
-    [SerializeField] private float jumpCooldown = 0.3f; // Time between jump attempts
+    [SerializeField] private float jumpForce = 12f;
+    [SerializeField] private float jumpCooldown = 1.5f;
+    [SerializeField] private float stuckThreshold = 0.5f; // Must be stuck for this long before jumping
+    
+    [Header("Ground/Wall Detection")]
+    [SerializeField] private LayerMask groundLayer;
+    [SerializeField] private float wallCheckDistance = 0.2f;
     
     [Header("Stomp Settings")]
     [SerializeField] private float stompBounceForce = 10f;
@@ -56,12 +47,11 @@ public class IceAgentController : MonoBehaviour
     
     // State
     private State currentState = State.Run;
-    private int facingDirection = -1;
-    private Vector3 startPosition;
+    private int facingDirection = 1;
     private float shootTimer;
-    private bool isDead = false;
-    private bool isGrounded = true;
     private float lastJumpTime = -10f;
+    private bool isDead = false;
+    private float stuckTime = 0f; // How long we've been stuck against a wall
     
     // Animation
     private Sprite[] currentAnimation;
@@ -71,10 +61,29 @@ public class IceAgentController : MonoBehaviour
     // Player reference
     private Transform player;
     
-    // Helper to check if a collider belongs to a HellMouth (can't use tags - not set!)
-    private bool IsHellMouth(Collider2D col)
+    // Ground check points (created dynamically)
+    private Vector2 GroundCheckPoint => (Vector2)transform.position + Vector2.down * 0.5f;
+    // Wall check at chest height (0.3 units up) to avoid detecting ground tiles
+    private Vector2 WallCheckPoint => (Vector2)transform.position + Vector2.up * 0.3f + Vector2.right * facingDirection * 0.5f;
+    
+    private bool IsGrounded()
     {
-        return col != null && col.GetComponent<HellMouth>() != null;
+        // Simple ground check - raycast down
+        RaycastHit2D hit = Physics2D.Raycast(GroundCheckPoint, Vector2.down, 0.2f, groundLayer);
+        return hit.collider != null;
+    }
+    
+    private bool IsBlockedByWall()
+    {
+        // Check if there's a wall in front of us
+        RaycastHit2D hit = Physics2D.Raycast(WallCheckPoint, Vector2.right * facingDirection, wallCheckDistance, groundLayer);
+        if (hit.collider != null)
+        {
+            // Don't count Hell Mouths as walls
+            if (hit.collider.GetComponent<HellMouth>() != null) return false;
+            return true;
+        }
+        return false;
     }
     
     private void Start()
@@ -83,7 +92,6 @@ public class IceAgentController : MonoBehaviour
         spriteRenderer = GetComponent<SpriteRenderer>();
         col = GetComponent<Collider2D>();
         
-        startPosition = transform.position;
         shootTimer = shootInterval;
         
         // Find player
@@ -91,78 +99,30 @@ public class IceAgentController : MonoBehaviour
         if (playerObj != null)
         {
             player = playerObj.transform;
-            // Start facing the player
-            facingDirection = player.position.x > transform.position.x ? 1 : -1;
-        }
-        else
-        {
-            facingDirection = -1; // Default to left if no player
-            Debug.LogWarning($"{name}: No player found!");
         }
         
-        // Create groundCheck if missing (for spawned agents)
-        if (groundCheck == null)
-        {
-            Debug.LogWarning($"{name}: No groundCheck assigned! Creating one...");
-            GameObject gc = new GameObject("GroundCheck");
-            gc.transform.parent = transform;
-            gc.transform.localPosition = new Vector3(0, -0.95f, 0);
-            groundCheck = gc.transform;
-        }
-        
-        // Create wallCheck if missing
-        if (wallCheck == null)
-        {
-            Debug.LogWarning($"{name}: No wallCheck assigned! Creating one...");
-            GameObject wc = new GameObject("WallCheck");
-            wc.transform.parent = transform;
-            wc.transform.localPosition = new Vector3(0.5f, 0, 0);
-            wallCheck = wc.transform;
-        }
-        
-        // Ensure groundLayer is set - if not, set it to Default + Ground layers
+        // Auto-configure ground layer if not set
         if (groundLayer.value == 0)
         {
-            // Layer 0 = Default, Layer 8 is often Ground - use both
-            // LayerMask.GetMask returns a bitmask, so we OR them together
-            int defaultLayer = 1 << 0; // Layer 0 = Default
+            int defaultLayer = 1 << 0;
             int groundLayerBit = LayerMask.NameToLayer("Ground");
-            if (groundLayerBit >= 0)
-            {
-                groundLayer = defaultLayer | (1 << groundLayerBit);
-            }
-            else
-            {
-                groundLayer = defaultLayer; // Just use Default if Ground doesn't exist
-            }
-            Debug.Log($"{name}: groundLayer was not set! Auto-configured to {groundLayer.value}");
+            groundLayer = groundLayerBit >= 0 ? (defaultLayer | (1 << groundLayerBit)) : defaultLayer;
         }
         
-        // Log setup info
-        Debug.Log($"{name} started: groundCheck={groundCheck != null}, wallCheck={wallCheck != null}, groundLayer={groundLayer.value}, player={player != null}");
-        
-        // Create a trigger collider for player detection (so player can pass through but we still detect stomp/damage)
+        // Create player detection trigger
         CreatePlayerDetectionTrigger();
         
-        // Set initial animation
         SetAnimation(runSprites);
-        UpdateSpriteDirection();
     }
     
-    /// <summary>
-    /// Creates a child object with a trigger collider for detecting player contact
-    /// This allows the player to pass through enemies while still getting stomped/damaged
-    /// </summary>
     private void CreatePlayerDetectionTrigger()
     {
-        // Create child object for trigger
         GameObject triggerObj = new GameObject("PlayerDetector");
         triggerObj.transform.parent = transform;
         triggerObj.transform.localPosition = Vector3.zero;
         triggerObj.transform.localRotation = Quaternion.identity;
         triggerObj.transform.localScale = Vector3.one;
         
-        // Copy the main collider's shape
         if (col is BoxCollider2D boxCol)
         {
             BoxCollider2D triggerBox = triggerObj.AddComponent<BoxCollider2D>();
@@ -178,22 +138,13 @@ public class IceAgentController : MonoBehaviour
             triggerCapsule.direction = capsuleCol.direction;
             triggerCapsule.isTrigger = true;
         }
-        else if (col is CircleCollider2D circleCol)
-        {
-            CircleCollider2D triggerCircle = triggerObj.AddComponent<CircleCollider2D>();
-            triggerCircle.radius = circleCol.radius;
-            triggerCircle.offset = circleCol.offset;
-            triggerCircle.isTrigger = true;
-        }
         else
         {
-            // Fallback: add a box collider
             BoxCollider2D triggerBox = triggerObj.AddComponent<BoxCollider2D>();
             triggerBox.size = new Vector2(1f, 1f);
             triggerBox.isTrigger = true;
         }
         
-        // Add the detection script
         PlayerDetector detector = triggerObj.AddComponent<PlayerDetector>();
         detector.Initialize(this);
     }
@@ -202,342 +153,114 @@ public class IceAgentController : MonoBehaviour
     {
         if (isDead) return;
         
-        // Ground check
-        CheckGrounded();
-        
         UpdateAnimation();
         
         switch (currentState)
         {
             case State.Run:
-                HandlePatrol();
-                CheckForPlayer();
+                UpdateRun();
                 break;
             case State.Jump:
-                // Check if landed
-                if (isGrounded && rb.velocity.y <= 0)
-                {
-                    currentState = State.Run;
-                    SetAnimation(runSprites);
-                }
+                UpdateJump();
                 break;
             case State.Shoot:
                 // Handled by coroutine
                 break;
-            case State.Smooshed:
-                // Dead, do nothing
-                break;
         }
     }
     
-    private void CheckGrounded()
+    private void UpdateRun()
     {
-        // Use a wider check - if groundLayer isn't set, check everything except triggers
-        LayerMask checkMask = groundLayer.value != 0 ? groundLayer : ~0; // ~0 = all layers
+        if (player == null) return;
         
-        Vector2 origin = groundCheck != null ? (Vector2)groundCheck.position : (Vector2)transform.position + Vector2.down * 0.5f;
+        // Always face the player
+        facingDirection = player.position.x > transform.position.x ? 1 : -1;
+        UpdateSpriteDirection();
         
-        // Use a box cast for more reliable ground detection
-        Vector2 boxSize = new Vector2(0.4f, 0.1f); // Wide but thin box
-        float distance = 0.3f; // Increased distance
-        
-        RaycastHit2D hit = Physics2D.BoxCast(origin, boxSize, 0f, Vector2.down, distance, checkMask);
-        
-        // Also do a simple velocity check as backup - if we're not moving down much, we're probably grounded
-        bool velocityGrounded = rb != null && Mathf.Abs(rb.velocity.y) < 0.1f && rb.velocity.y <= 0;
-        
-        // Only count as grounded if we hit something that's NOT a Hell Mouth
-        if (hit.collider != null && !IsHellMouth(hit.collider))
+        // Check for shooting
+        float distToPlayer = Vector2.Distance(transform.position, player.position);
+        if (distToPlayer < shootingRange)
         {
-            isGrounded = true;
+            shootTimer -= Time.deltaTime;
+            if (shootTimer <= 0)
+            {
+                StartCoroutine(ShootRoutine());
+                shootTimer = shootInterval;
+            }
         }
-        else if (velocityGrounded && currentState != State.Jump)
+        
+        // Check if we're stuck (not moving horizontally when we should be)
+        bool isStuck = Mathf.Abs(rb.velocity.x) < 0.5f && IsGrounded();
+        
+        if (isStuck && IsBlockedByWall())
         {
-            // Fallback: if velocity says we're grounded and we're not jumping, trust it
-            // But verify with a longer raycast
-            RaycastHit2D longHit = Physics2D.Raycast(origin, Vector2.down, 0.5f, checkMask);
-            isGrounded = longHit.collider != null && !IsHellMouth(longHit.collider);
+            stuckTime += Time.deltaTime;
+            
+            // Only jump if we've been stuck for a while
+            if (stuckTime >= stuckThreshold && CanJump())
+            {
+                Debug.Log($"{name}: Been stuck for {stuckTime:F1}s, jumping!");
+                Jump();
+                stuckTime = 0f;
+            }
         }
         else
         {
-            isGrounded = false;
+            stuckTime = 0f; // Reset if we're moving
+        }
+    }
+    
+    private void UpdateJump()
+    {
+        // Check if we've landed
+        if (IsGrounded() && rb.velocity.y <= 0.1f)
+        {
+            currentState = State.Run;
+            SetAnimation(runSprites);
         }
     }
     
     private void FixedUpdate()
     {
-        if (isDead || currentState == State.Shoot || currentState == State.Smooshed) return;
+        if (isDead) return;
         
-        // Choose speed - faster when actively chasing
-        float currentSpeed = moveSpeed;
-        if (alwaysChasePlayer && player != null)
+        // Always move toward player (except when shooting or dead)
+        if (currentState == State.Shoot || currentState == State.Smooshed)
         {
-            float distToPlayer = Vector2.Distance(transform.position, player.position);
-            // Use chase speed when player is in detection range
-            if (distToPlayer < detectionRange)
-            {
-                currentSpeed = chaseSpeed;
-            }
-        }
-        
-        // Check if blocked by wall (don't push against it)
-        // Ignore Hell Mouths - they're not real walls!
-        bool blockedByWall = false;
-        if (wallCheck != null && currentState != State.Jump)
-        {
-            RaycastHit2D wallHit = Physics2D.Raycast(wallCheck.position, Vector2.right * facingDirection, checkDistance * 0.5f, groundLayer);
-            if (wallHit.collider != null && !IsHellMouth(wallHit.collider))
-            {
-                blockedByWall = true;
-                
-                // KEY FIX: If we're blocked and can jump, DO IT!
-                if (canJumpObstacles && isGrounded)
-                {
-                    Debug.Log($"{name}: BLOCKED by {wallHit.collider.name}, jumping!");
-                    TryJump();
-                }
-            }
-        }
-        
-        // Move - always move while jumping!
-        if (currentState == State.Jump)
-        {
-            // While jumping, just keep horizontal momentum, don't reset velocity
-            rb.velocity = new Vector2(facingDirection * currentSpeed, rb.velocity.y);
-        }
-        else if (!blockedByWall)
-        {
-            rb.velocity = new Vector2(facingDirection * currentSpeed, rb.velocity.y);
-        }
-        else
-        {
-            // Blocked by wall - stop horizontal movement but preserve vertical
-            rb.velocity = new Vector2(0, rb.velocity.y);
-        }
-    }
-    
-    private void HandlePatrol()
-    {
-        // Always try to face and chase the player
-        if (alwaysChasePlayer && player != null)
-        {
-            // Determine which direction player is
-            int directionToPlayer = player.position.x > transform.position.x ? 1 : -1;
-            
-            // Turn to face player if not already
-            if (facingDirection != directionToPlayer)
-            {
-                facingDirection = directionToPlayer;
-                UpdateSpriteDirection();
-            }
-            
-            // Check if player is ABOVE us - need to jump to reach them!
-            float heightDiff = player.position.y - transform.position.y;
-            float horizontalDist = Mathf.Abs(player.position.x - transform.position.x);
-            
-            // If player is above us and we're close horizontally, try jumping
-            if (heightDiff > 0.5f && horizontalDist < 3f)
-            {
-                // Debug.Log($"{name}: Player is above! heightDiff={heightDiff:F1}, dist={horizontalDist:F1}, grounded={isGrounded}");
-                if (isGrounded) TryJump();
-            }
-            // Also jump if player is above and there's a wall in front (platform edge)
-            else if (heightDiff > 0.5f && isGrounded)
-            {
-                // Check if there's a platform/wall we need to jump onto (ignore Hell Mouths)
-                if (wallCheck != null)
-                {
-                    RaycastHit2D wallHit = Physics2D.Raycast(wallCheck.position, Vector2.right * facingDirection, checkDistance, groundLayer);
-                    if (wallHit.collider != null && !IsHellMouth(wallHit.collider))
-                    {
-                        TryJump();
-                    }
-                }
-            }
-        }
-        
-        // Check for obstacles ahead - use multiple ray heights to catch all obstacle sizes
-        if (canJumpObstacles && isGrounded)
-        {
-            bool obstacleDetected = false;
-            string obstacleName = "";
-            float rayDistance = checkDistance * 2f; // Detect obstacles earlier
-            
-            // Check at wall height (mid-body) for tall obstacles
-            if (wallCheck != null)
-            {
-                RaycastHit2D wallHit = Physics2D.Raycast(wallCheck.position, Vector2.right * facingDirection, rayDistance, groundLayer);
-                if (wallHit.collider != null && !IsHellMouth(wallHit.collider))
-                {
-                    obstacleDetected = true;
-                    obstacleName = wallHit.collider.name + " (wall)";
-                }
-            }
-            
-            // Check at step height (between foot and mid-body) - catches single tile steps!
-            if (!obstacleDetected && groundCheck != null)
-            {
-                Vector2 stepCheckPos = (Vector2)groundCheck.position + Vector2.up * 0.4f; // ~0.4 units up from feet
-                RaycastHit2D stepHit = Physics2D.Raycast(stepCheckPos, Vector2.right * facingDirection, rayDistance, groundLayer);
-                if (stepHit.collider != null && !IsHellMouth(stepHit.collider))
-                {
-                    obstacleDetected = true;
-                    obstacleName = stepHit.collider.name + " (step)";
-                }
-            }
-            
-            // Check at foot level for very small bumps
-            if (!obstacleDetected && groundCheck != null)
-            {
-                Vector2 footCheckPos = (Vector2)groundCheck.position + Vector2.up * 0.15f;
-                RaycastHit2D footHit = Physics2D.Raycast(footCheckPos, Vector2.right * facingDirection, rayDistance, groundLayer);
-                if (footHit.collider != null && !IsHellMouth(footHit.collider))
-                {
-                    obstacleDetected = true;
-                    obstacleName = footHit.collider.name + " (foot)";
-                }
-            }
-            
-            if (obstacleDetected)
-            {
-                Debug.Log($"{name}: Obstacle detected ({obstacleName}), jumping!");
-                TryJump();
-            }
-        }
-        
-        // DEBUG: Show raycast info every few seconds
-        if (Time.frameCount % 120 == 0 && wallCheck != null && groundCheck != null)
-        {
-            float rayDistance = checkDistance * 2f;
-            RaycastHit2D debugWall = Physics2D.Raycast(wallCheck.position, Vector2.right * facingDirection, rayDistance, groundLayer);
-            RaycastHit2D debugStep = Physics2D.Raycast((Vector2)groundCheck.position + Vector2.up * 0.4f, Vector2.right * facingDirection, rayDistance, groundLayer);
-            RaycastHit2D debugFoot = Physics2D.Raycast((Vector2)groundCheck.position + Vector2.up * 0.15f, Vector2.right * facingDirection, rayDistance, groundLayer);
-            
-            // Ground check debug
-            RaycastHit2D debugGround = Physics2D.BoxCast(groundCheck.position, new Vector2(0.4f, 0.1f), 0f, Vector2.down, 0.3f, groundLayer);
-            
-            Debug.Log($"{name} DEBUG: grounded={isGrounded}, vel.y={rb.velocity.y:F2}, groundHit={debugGround.collider?.name ?? "NONE"}, groundCheckPos={groundCheck.position}, groundLayer={groundLayer.value}");
-            Debug.Log($"{name} raycast: wallHit={debugWall.collider?.name ?? "none"}, stepHit={debugStep.collider?.name ?? "none"}, footHit={debugFoot.collider?.name ?? "none"}, facing={facingDirection}");
-        }
-        
-        // Check for ledges - even chasers shouldn't run off cliffs (unless enabled)
-        if (!canFallOffEdges && groundCheck != null && isGrounded)
-        {
-            bool hasGroundAhead = Physics2D.Raycast(groundCheck.position, Vector2.down, checkDistance, groundLayer);
-            if (!hasGroundAhead)
-            {
-                // Stop at edge but don't turn - wait for player
-                rb.velocity = new Vector2(0, rb.velocity.y);
-                return;
-            }
-        }
-        
-        // Update sprite direction
-        UpdateSpriteDirection();
-    }
-    
-    private bool CanJumpOverObstacle()
-    {
-        if (!isGrounded) return false;
-        if (Time.time - lastJumpTime < jumpCooldown) return false;
-        
-        // Cast a ray from higher up to see if obstacle is short enough to jump
-        Vector3 highCheckPos = wallCheck.position + Vector3.up * maxJumpableHeight;
-        RaycastHit2D highHit = Physics2D.Raycast(highCheckPos, Vector2.right * facingDirection, checkDistance * 1.5f, groundLayer);
-        
-        // If high ray doesn't hit anything, obstacle is jumpable!
-        return highHit.collider == null;
-    }
-    
-    private void TryJump()
-    {
-        // Debug info - uncomment to diagnose jump issues
-        if (!isGrounded)
-        {
-            Debug.Log($"{name}: Can't jump - not grounded (groundCheck={groundCheck}, groundLayer={groundLayer.value})");
-            return;
-        }
-        if (currentState == State.Jump)
-        {
-            Debug.Log($"{name}: Can't jump - already jumping");
-            return;
-        }
-        if (Time.time - lastJumpTime < jumpCooldown)
-        {
-            // Debug.Log($"{name}: Can't jump - cooldown"); // This one is spammy
             return;
         }
         
-        // Calculate jump force - jump higher if player is above us
-        float actualJumpForce = jumpForce;
-        if (player != null)
-        {
-            float heightDiff = player.position.y - transform.position.y;
-            if (heightDiff > 1f)
-            {
-                // Need to jump higher! Scale jump force based on height difference
-                actualJumpForce = jumpForce * Mathf.Clamp(1f + (heightDiff * 0.3f), 1f, 1.8f);
-            }
-        }
-        
-        Debug.Log($"{name}: JUMPING with force {actualJumpForce}!");
-        
-        // Jump!
-        rb.velocity = new Vector2(rb.velocity.x, actualJumpForce);
+        // Move horizontally - always chase!
+        rb.velocity = new Vector2(facingDirection * chaseSpeed, rb.velocity.y);
+    }
+    
+    private bool CanJump()
+    {
+        return Time.time - lastJumpTime >= jumpCooldown;
+    }
+    
+    private void Jump()
+    {
+        rb.velocity = new Vector2(rb.velocity.x, jumpForce);
         currentState = State.Jump;
         SetAnimation(jumpSprites);
         lastJumpTime = Time.time;
-        isGrounded = false;
-    }
-    
-    private void UpdateSpriteDirection()
-    {
-        // Flip sprite based on movement direction
-        // ICE Agent sprite faces RIGHT by default, flip when going LEFT
-        spriteRenderer.flipX = facingDirection < 0;
-    }
-    
-    private void CheckForPlayer()
-    {
-        if (player == null) return;
-        
-        float distanceToPlayer = Vector2.Distance(transform.position, player.position);
-        
-        // Check if player is in shooting range
-        if (distanceToPlayer < shootingRange)
-        {
-            // Shoot timer
-            shootTimer -= Time.deltaTime;
-            if (shootTimer <= 0)
-            {
-                // Face the player only when actually shooting
-                if (player.position.x > transform.position.x && facingDirection < 0)
-                {
-                    Flip();
-                }
-                else if (player.position.x < transform.position.x && facingDirection > 0)
-                {
-                    Flip();
-                }
-                
-                StartCoroutine(ShootRoutine());
-                shootTimer = shootInterval;
-            }
-        }
     }
     
     private IEnumerator ShootRoutine()
     {
         currentState = State.Shoot;
-        rb.velocity = Vector2.zero;
+        rb.velocity = new Vector2(0, rb.velocity.y); // Stop horizontal movement
         SetAnimation(shootSprites);
         
         yield return new WaitForSeconds(shootPauseDuration * 0.5f);
         
         // Fire projectile
-        if (projectilePrefab != null && firePoint != null)
+        if (projectilePrefab != null)
         {
-            GameObject proj = Instantiate(projectilePrefab, firePoint.position, Quaternion.identity);
+            Vector3 spawnPos = firePoint != null ? firePoint.position : transform.position + Vector3.right * facingDirection * 0.5f;
+            GameObject proj = Instantiate(projectilePrefab, spawnPos, Quaternion.identity);
+            
             Projectile projScript = proj.GetComponent<Projectile>();
             if (projScript != null)
             {
@@ -545,7 +268,6 @@ public class IceAgentController : MonoBehaviour
             }
             else
             {
-                // Basic projectile movement
                 Rigidbody2D projRb = proj.GetComponent<Rigidbody2D>();
                 if (projRb != null)
                 {
@@ -560,10 +282,10 @@ public class IceAgentController : MonoBehaviour
         SetAnimation(runSprites);
     }
     
-    private void Flip()
+    private void UpdateSpriteDirection()
     {
-        facingDirection *= -1;
-        UpdateSpriteDirection();
+        // ICE Agent sprite faces RIGHT by default, flip when going LEFT
+        spriteRenderer.flipX = facingDirection < 0;
     }
     
     private void SetAnimation(Sprite[] sprites)
@@ -600,23 +322,16 @@ public class IceAgentController : MonoBehaviour
         isDead = true;
         currentState = State.Smooshed;
         
-        // Bounce the player
         if (playerRb != null)
         {
             playerRb.velocity = new Vector2(playerRb.velocity.x, stompBounceForce);
         }
         
-        // Play death animation
         SetAnimation(smooshedSprites);
-        
-        // Stop movement
         rb.velocity = Vector2.zero;
         rb.isKinematic = true;
-        
-        // Disable collider
         col.enabled = false;
         
-        // Destroy after animation
         Destroy(gameObject, smooshDuration);
     }
     
@@ -627,7 +342,6 @@ public class IceAgentController : MonoBehaviour
     {
         if (isDead) return;
         
-        // Check if player is above us (stomp)
         float playerY = playerCollider.transform.position.y;
         float enemyTopY = transform.position.y + (col.bounds.size.y * 0.3f);
         
@@ -635,12 +349,10 @@ public class IceAgentController : MonoBehaviour
         
         if (playerY > enemyTopY && playerRb != null && playerRb.velocity.y < 0)
         {
-            // Stomped!
             GetStomped(playerRb);
         }
         else
         {
-            // Player hit from side - hurt player
             PlayerHealth health = playerCollider.GetComponent<PlayerHealth>();
             if (health != null)
             {
@@ -650,104 +362,32 @@ public class IceAgentController : MonoBehaviour
     }
     
     /// <summary>
-    /// Handle continuous player contact (for ongoing damage, etc.)
+    /// Handle continuous player contact
     /// </summary>
     public void HandlePlayerContactContinuous(Collider2D playerCollider)
     {
-        // Currently we only damage on initial contact, but this could be used
-        // for continuous damage if needed in the future
-    }
-    
-    /// <summary>
-    /// Legacy collision handler - no longer handles player contact (now uses trigger)
-    /// Kept for obstacle/ground collision detection
-    /// </summary>
-    private void OnCollisionEnter2D(Collision2D collision)
-    {
-        // Player contact is now handled by PlayerDetector trigger
-        // This only handles non-player collisions
-    }
-    
-    /// <summary>
-    /// Detect when agent is physically pressed against something - more reliable than raycasts for single steps
-    /// </summary>
-    private void OnCollisionStay2D(Collision2D collision)
-    {
-        if (isDead || currentState == State.Jump || currentState == State.Shoot) return;
-        if (!canJumpObstacles || !isGrounded) return;
-        
-        // Don't try to jump over players or Hell Mouths
-        if (collision.gameObject.CompareTag("Player")) return;
-        if (IsHellMouth(collision.collider)) return;
-        
-        // Check each contact point to see if we're being blocked horizontally
-        foreach (ContactPoint2D contact in collision.contacts)
-        {
-            // Get the contact normal - if it's mostly horizontal and opposing our movement, we're blocked
-            float horizontalComponent = Vector2.Dot(contact.normal, Vector2.right * -facingDirection);
-            
-            if (horizontalComponent > 0.7f) // Contact is blocking our forward movement
-            {
-                // Check if the contact is at a jumpable height (not too high, not at head level)
-                float contactHeight = contact.point.y - transform.position.y;
-                
-                // Only jump if the obstacle is at foot/leg level (roughly -0.5 to 0.5 of our center)
-                if (contactHeight >= -0.8f && contactHeight <= 0.5f)
-                {
-                    Debug.Log($"{name}: Collision-based jump trigger! Contact={collision.gameObject.name}, height={contactHeight:F2}, normal={contact.normal}");
-                    TryJump();
-                    return; // Only need one jump trigger
-                }
-            }
-        }
+        // Not used currently
     }
     
     private void OnDrawGizmos()
     {
-        // Always show obstacle detection rays (not just when selected)
         int dir = Application.isPlaying ? facingDirection : 1;
-        float rayDistance = checkDistance * 2f;
         
-        // Wall check ray (cyan) - for tall obstacles
-        if (wallCheck != null)
-        {
-            Gizmos.color = Color.cyan;
-            Gizmos.DrawLine(wallCheck.position, wallCheck.position + Vector3.right * dir * rayDistance);
-        }
+        // Ground check (green)
+        Gizmos.color = Color.green;
+        Vector3 groundPos = transform.position + Vector3.down * 0.5f;
+        Gizmos.DrawLine(groundPos, groundPos + Vector3.down * 0.2f);
         
-        // Step check ray (yellow) - for single-tile steps
-        if (groundCheck != null)
-        {
-            Gizmos.color = Color.yellow;
-            Vector3 stepPos = groundCheck.position + Vector3.up * 0.4f;
-            Gizmos.DrawLine(stepPos, stepPos + Vector3.right * dir * rayDistance);
-        }
-        
-        // Foot check ray (magenta) - for very small obstacles
-        if (groundCheck != null)
-        {
-            Gizmos.color = Color.magenta;
-            Vector3 footPos = groundCheck.position + Vector3.up * 0.15f;
-            Gizmos.DrawLine(footPos, footPos + Vector3.right * dir * rayDistance);
-        }
-        
-        // Ground check ray (green)
-        if (groundCheck != null)
-        {
-            Gizmos.color = Color.green;
-            Gizmos.DrawLine(groundCheck.position, groundCheck.position + Vector3.down * 0.2f);
-        }
+        // Wall check at chest height (cyan)
+        Gizmos.color = Color.cyan;
+        Vector3 wallPos = transform.position + Vector3.up * 0.3f + Vector3.right * dir * 0.5f;
+        Gizmos.DrawLine(wallPos, wallPos + Vector3.right * dir * wallCheckDistance);
     }
     
     private void OnDrawGizmosSelected()
     {
-        // Detection range
-        Gizmos.color = Color.yellow;
-        Gizmos.DrawWireSphere(transform.position, detectionRange);
-        
         // Shooting range
         Gizmos.color = Color.red;
         Gizmos.DrawWireSphere(transform.position, shootingRange);
     }
 }
-
